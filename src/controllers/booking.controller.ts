@@ -106,3 +106,48 @@ export const getBookingById = async (
     });
   }
 };
+
+export const getBookingsByMobile = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const { mobile } = req.params;
+
+    const { data, error } = await supabase
+      .from("bookings")
+      .select(`
+        booking_id,
+        booking_status,
+        check_in,
+        check_out,
+        total_amount,
+        guests!inner (
+          full_name,
+          mobile,
+          email
+        ),
+        rooms (
+          room_number,
+          room_type
+        )
+      `)
+      .eq("guests.mobile", mobile)
+      .eq("booking_status", "confirmed");
+    if (error) {
+      return res.status(500).json(error);
+    }
+
+    if (!data || data.length === 0) {
+      return res.status(404).json({
+        message: "No bookings found"
+      });
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({
+      message: "Internal Server Error"
+    });
+  }
+};
