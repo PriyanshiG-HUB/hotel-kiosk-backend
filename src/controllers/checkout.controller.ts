@@ -14,7 +14,11 @@ export const checkoutGuest = async (
         .select("*")
         .eq("booking_id", booking_id)
         .single();
-
+    if (booking.checked_out) {
+  return res.status(400).json({
+    message: "Guest already checked out",
+  });
+}
     if (bookingError || !booking) {
       return res.status(404).json({
         message: "Booking not found",
@@ -26,6 +30,7 @@ export const checkoutGuest = async (
       .update({
         checked_out: true,
         booking_status: "completed",
+        checked_out_at: new Date().toISOString(),
       })
       .eq("booking_id", booking_id);
 

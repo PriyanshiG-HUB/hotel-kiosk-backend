@@ -91,7 +91,7 @@ export const getBookingById = async (
         )
       `)
       .eq("booking_id", id)
-      .single();
+      .limit(1);
 
     if (error || !data) {
       return res.status(404).json({
@@ -99,7 +99,7 @@ export const getBookingById = async (
       });
     }
 
-    res.json(data);
+    res.json(data[0]);
   } catch (error) {
     res.status(500).json({
       message: "Internal Server Error",
@@ -133,21 +133,70 @@ export const getBookingsByMobile = async (
         )
       `)
       .eq("guests.mobile", mobile)
-      .eq("booking_status", "confirmed");
-    if (error) {
-      return res.status(500).json(error);
-    }
+      .eq("booking_status", "confirmed")
+      .single();
 
-    if (!data || data.length === 0) {
+    if (error || !data) {
       return res.status(404).json({
-        message: "No bookings found"
+        message: "No booking found",
       });
     }
 
     res.json(data);
   } catch (error) {
     res.status(500).json({
-      message: "Internal Server Error"
+      message: "Internal Server Error",
+    });
+  }
+};
+
+export const getBookingByRoom = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const { roomNo } = req.params;
+
+    const { data, error } = await supabase
+      .from("bookings")
+      .select(`
+        booking_id,
+        booking_status,
+        check_in,
+        check_out,
+        total_amount,
+        guests (
+          full_name,
+          mobile,
+          email
+        ),
+        rooms!inner (
+          room_number,
+          room_type
+        )
+      `)
+      .eq("rooms.room_number", roomNo)
+      .eq("booking_status", "confirmed")
+      .single();
+
+    console.log(
+      "Room Search Result:",
+      data,
+      error
+    );
+
+    if (error || !data) {
+      return res.status(404).json({
+        message: "No booking found",
+      });
+    }
+
+    res.json(data);
+  } catch (error) {
+    console.log(error);
+
+    res.status(500).json({
+      message: "Internal Server Error",
     });
   }
 };

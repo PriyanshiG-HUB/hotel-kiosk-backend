@@ -66,7 +66,59 @@ export const getVisitors = async (
     });
   }
 };
+export const getVisitorById = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const { visitorId } = req.params;
 
+    const { data, error } = await supabase
+      .from("visitors")
+      .select("*")
+      .eq("visitor_id", visitorId)
+      .single();
+
+    if (error || !data) {
+      return res.status(404).json({
+        message: "Visitor not found",
+      });
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({
+      message: "Internal Server Error",
+    });
+  }
+};
+
+export const searchVisitorByName = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const { name } = req.params;
+
+    const { data, error } = await supabase
+      .from("visitors")
+      .select("*")
+      .ilike("full_name", `%${name}%`)
+      .order("check_in_time", {
+        ascending: false,
+      });
+
+    if (error) {
+      return res.status(500).json(error);
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({
+      message: "Internal Server Error",
+    });
+  }
+};
 export const checkoutVisitor = async (
   req: Request,
   res: Response

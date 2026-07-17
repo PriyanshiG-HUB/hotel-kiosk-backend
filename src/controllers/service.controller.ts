@@ -11,6 +11,7 @@ export const createServiceRequest = async (
       guest_name,
       service_type,
       description,
+      quantity,
     } = req.body;
 
     const { data, error } = await supabase
@@ -21,6 +22,7 @@ export const createServiceRequest = async (
           guest_name,
           service_type,
           description,
+          quantity,
         },
       ])
       .select();
