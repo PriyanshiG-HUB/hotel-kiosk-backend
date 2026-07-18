@@ -54,12 +54,19 @@ export const createBooking = async (
     }
 
     // Update room status
-    await supabase
+    const { error: roomUpdateError } = await supabase
       .from("rooms")
       .update({
         status: "occupied",
       })
       .eq("room_id", room_id);
+
+    if (roomUpdateError) {
+      return res.status(500).json({
+        message: "Failed to update room status",
+        error: roomUpdateError.message,
+      });
+    }
 
     res.status(201).json(data);
   } catch (err) {
@@ -79,21 +86,26 @@ export const getBookingById = async (
     const { data, error } = await supabase
       .from("bookings")
       .select(`
-        *,
-        guests (
-          full_name,
-          mobile,
-          email
-        ),
-        rooms (
-          room_number,
-          room_type
-        )
-      `)
+  *,
+  guests (
+    full_name,
+    mobile,
+    email,
+    nationality,
+    id_type,
+    id_number
+  ),
+  rooms (
+    room_id,
+    room_number,
+    room_type,
+    price_per_night
+  )
+`)
       .eq("booking_id", id)
       .limit(1);
 
-    if (error || !data) {
+    if (error || !data || data.length === 0) {
       return res.status(404).json({
         message: "Booking not found",
       });
@@ -112,37 +124,52 @@ export const getBookingsByMobile = async (
   res: Response
 ) => {
   try {
-    const { mobile } = req.params;
+    const mobile = req.params.mobile as string;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mobile);
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("bookings")
       .select(`
-        booking_id,
-        booking_status,
-        check_in,
-        check_out,
-        total_amount,
-        guests!inner (
-          full_name,
-          mobile,
-          email
-        ),
-        rooms (
-          room_number,
-          room_type
-        )
-      `)
-      .eq("guests.mobile", mobile)
-      .eq("booking_status", "confirmed")
-      .single();
+  booking_id,
+  booking_status,
+  check_in,
+  check_out,
+  nights,
+  total_amount,
+  guests!inner (
+    full_name,
+    mobile,
+    email,
+    nationality,
+    id_type,
+    id_number
+  ),
+  rooms (
+    room_id,
+    room_number,
+    room_type,
+    price_per_night
+  )
+`)
 
-    if (error || !data) {
+    if (isUuid) {
+      query = query.eq("booking_id", mobile);
+    } else {
+      query = query.eq("guests.mobile", mobile);
+    }
+
+    const { data, error } = await query
+      .eq("booking_status", "confirmed")
+      .order("check_in", { ascending: false })
+      .limit(1);
+
+    if (error || !data || data.length === 0) {
       return res.status(404).json({
         message: "No booking found",
       });
     }
 
-    res.json(data);
+    res.json(data[0]);
   } catch (error) {
     res.status(500).json({
       message: "Internal Server Error",
@@ -160,24 +187,31 @@ export const getBookingByRoom = async (
     const { data, error } = await supabase
       .from("bookings")
       .select(`
-        booking_id,
-        booking_status,
-        check_in,
-        check_out,
-        total_amount,
-        guests (
-          full_name,
-          mobile,
-          email
-        ),
-        rooms!inner (
-          room_number,
-          room_type
-        )
-      `)
+  booking_id,
+  booking_status,
+  check_in,
+  check_out,
+  nights,
+  total_amount,
+  guests (
+    full_name,
+    mobile,
+    email,
+    nationality,
+    id_type,
+    id_number
+  ),
+  rooms!inner (
+    room_id,
+    room_number,
+    room_type,
+    price_per_night
+  )
+`)
       .eq("rooms.room_number", roomNo)
       .eq("booking_status", "confirmed")
-      .single();
+      .order("check_in", { ascending: false })
+      .limit(1);
 
     console.log(
       "Room Search Result:",
@@ -185,16 +219,72 @@ export const getBookingByRoom = async (
       error
     );
 
-    if (error || !data) {
+    if (error || !data || data.length === 0) {
       return res.status(404).json({
         message: "No booking found",
       });
     }
 
-    res.json(data);
+    res.json(data[0]);
   } catch (error) {
     console.log(error);
 
+    res.status(500).json({
+      message: "Internal Server Error",
+    });
+  }
+};
+
+export const getBookingsByGuestName = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const { name } = req.params;
+
+    const { data, error } = await supabase
+      .from("bookings")
+      .select(`
+        booking_id,
+        booking_status,
+        check_in,
+        check_out,
+        nights,
+        total_amount,
+        guests!inner (
+          full_name,
+          mobile,
+          email,
+          nationality,
+          id_type,
+          id_number
+        ),
+        rooms (
+          room_id,
+          room_number,
+          room_type,
+          price_per_night
+        )
+      `)
+      .ilike("guests.full_name", `%${name}%`)
+      .eq("booking_status", "confirmed")
+      .limit(2);
+
+    if (error || !data || data.length === 0) {
+      return res.status(404).json({
+        message: "No booking found",
+      });
+    }
+
+    if (data.length > 1) {
+      return res.status(300).json({
+        message: "Multiple matching guests found. Please search by room number to select the correct guest.",
+      });
+    }
+
+    res.json(data[0]);
+  } catch (error) {
+    console.log(error);
     res.status(500).json({
       message: "Internal Server Error",
     });

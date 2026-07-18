@@ -6,34 +6,21 @@ export const getDashboardStats = async (
   res: Response
 ) => {
   try {
-    const { count: totalRooms } = await supabase
-      .from("rooms")
-      .select("*", { count: "exact", head: true });
-
-    const { count: occupiedRooms } = await supabase
-      .from("rooms")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "occupied");
-
-    const { count: availableRooms } = await supabase
-      .from("rooms")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "available");
-
-    const { count: activeVisitors } = await supabase
-      .from("visitors")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "checked_in");
-
-    const { count: pendingRequests } = await supabase
-      .from("service_requests")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "pending");
-
-    const { count: activeBookings } = await supabase
-      .from("bookings")
-      .select("*", { count: "exact", head: true })
-      .eq("booking_status", "confirmed");
+    const [
+      { count: totalRooms },
+      { count: occupiedRooms },
+      { count: availableRooms },
+      { count: activeVisitors },
+      { count: pendingRequests },
+      { count: activeBookings },
+    ] = await Promise.all([
+      supabase.from("rooms").select("*", { count: "exact", head: true }),
+      supabase.from("rooms").select("*", { count: "exact", head: true }).eq("status", "occupied"),
+      supabase.from("rooms").select("*", { count: "exact", head: true }).eq("status", "available"),
+      supabase.from("visitors").select("*", { count: "exact", head: true }).eq("status", "checked_in"),
+      supabase.from("service_requests").select("*", { count: "exact", head: true }).eq("status", "pending"),
+      supabase.from("bookings").select("*", { count: "exact", head: true }).eq("booking_status", "confirmed"),
+    ]);
 
     return res.status(200).json({
       totalRooms: totalRooms || 0,

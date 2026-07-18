@@ -14,18 +14,20 @@ export const checkoutGuest = async (
         .select("*")
         .eq("booking_id", booking_id)
         .single();
-    if (booking.checked_out) {
-  return res.status(400).json({
-    message: "Guest already checked out",
-  });
-}
+
     if (bookingError || !booking) {
       return res.status(404).json({
         message: "Booking not found",
       });
     }
 
-    await supabase
+    if (booking.checked_out || booking.booking_status === "completed") {
+      return res.status(400).json({
+        message: "Guest already checked out",
+      });
+    }
+
+    const { error: bookingUpdateError } = await supabase
       .from("bookings")
       .update({
         checked_out: true,
@@ -34,12 +36,26 @@ export const checkoutGuest = async (
       })
       .eq("booking_id", booking_id);
 
-    await supabase
+    if (bookingUpdateError) {
+      return res.status(500).json({
+        message: "Failed to update booking checkout status",
+        error: bookingUpdateError.message,
+      });
+    }
+
+    const { error: roomUpdateError } = await supabase
       .from("rooms")
       .update({
         status: "available",
       })
       .eq("room_id", booking.room_id);
+
+    if (roomUpdateError) {
+      return res.status(500).json({
+        message: "Failed to update room status",
+        error: roomUpdateError.message,
+      });
+    }
 
     res.json({
       message: "Checkout completed successfully",

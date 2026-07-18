@@ -16,7 +16,7 @@ router.post(
       .withMessage("Invalid mobile number"),
 
     body("email")
-      .optional()
+      .optional({ checkFalsy: true })
       .isEmail()
       .withMessage("Invalid email"),
   ],

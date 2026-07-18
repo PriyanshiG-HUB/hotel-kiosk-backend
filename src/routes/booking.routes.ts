@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createBooking, getBookingById ,getBookingByRoom,getBookingsByMobile} from "../controllers/booking.controller";
+import { createBooking, getBookingById ,getBookingByRoom,getBookingsByMobile, getBookingsByGuestName} from "../controllers/booking.controller";
 import { body } from "express-validator";
 import { validate } from "../middleware/validation";
 const router = Router();
@@ -30,6 +30,7 @@ router.post(
   validate,
   createBooking
 );
+router.get("/search/guest/:name", getBookingsByGuestName);
 router.get("/search/:mobile", getBookingsByMobile);
 router.get("/room/:roomNo", getBookingByRoom);
 router.get("/:id", getBookingById);

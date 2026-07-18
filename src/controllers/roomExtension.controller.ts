@@ -43,7 +43,7 @@ export const createRoomExtension = async (
     if (error) throw error;
 
     // Update booking checkout date
-    await supabase
+    const { error: updateError } = await supabase
       .from("bookings")
       .update({
         check_out: new_checkout,
@@ -53,6 +53,8 @@ export const createRoomExtension = async (
           Number(additional_amount),
       })
       .eq("booking_id", booking_id);
+
+    if (updateError) throw updateError;
 
     return res.status(201).json(data);
   } catch (error) {

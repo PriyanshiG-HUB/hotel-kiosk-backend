@@ -13,6 +13,10 @@ import helpRoutes from "./routes/help.routes";
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path}`, req.body);
+  next();
+});
 
 app.get("/", (req, res) => {
   res.send("Hotel Kiosk Backend Running");
