@@ -90,6 +90,7 @@ export class IdVerificationSessionService {
       bookingId: dto.bookingId,
       guestId: dto.guestId,
       expectedGuestName: dto.guestName,
+      enteredDocumentNumber: dto.enteredDocumentNumber,
       selectedIdType: dto.selectedIdType,
       issuingCountry: dto.issuingCountry,
       consentObtained: dto.consentGiven,
@@ -178,17 +179,26 @@ export class IdVerificationSessionService {
 
     // Sync with Supabase if table exists
     try {
+      const isUUID = session.staffReview?.staffId &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session.staffReview.staffId);
+
       const { error } = await supabase
         .from('id_verifications')
         .update({
           status: session.status,
           extracted_name: session.extractedFields?.fullName || null,
           document_masked: session.extractedFields?.documentNumberMasked || null,
+          date_of_birth: session.extractedFields?.dateOfBirth || null,
+          expiration_date: session.extractedFields?.expirationDate || null,
+          extraction_quality: session.extractionQuality || (session.extractedFields?.confidence ? Math.round(session.extractedFields.confidence * 100) : null),
+          extracted_fields_json: session.extractedFields || null,
           authenticity_status: session.authenticity?.status || null,
           overall_outcome: session.overallOutcome,
           reviewed_by: session.staffReview?.reviewedBy || null,
+          reviewed_by_staff_id: isUUID ? session.staffReview?.staffId : null,
           reviewed_at: session.staffReview?.reviewedAt || null,
           staff_notes: session.staffReview?.notes || null,
+          physical_id_inspected: session.staffReview?.physicalOriginalInspected ?? false,
           updated_at: session.updatedAt,
         })
         .eq('session_id', sessionId);
@@ -214,15 +224,22 @@ export class IdVerificationSessionService {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
 
+    // Concurrency / Duplicate check: prevent conflicting duplicate review
+    if (session.staffReview?.decision && (session.status === 'authenticity_verified' || session.status === 'authenticity_failed')) {
+      throw new Error(`Session has already been reviewed with outcome "${session.staffReview.decision}" by ${session.staffReview.reviewedBy}. Duplicate review blocked.`);
+    }
+
     const isApproved = review.decision === 'approved';
     const now = new Date().toISOString();
 
     const staffRecord = {
       reviewedBy: review.staffId,
+      staffId: review.staffId,
       staffName: review.staffName || 'Kiosk Staff Member',
       reviewedAt: now,
       decision: review.decision,
       notes: review.notes,
+      physicalOriginalInspected: review.physicalOriginalInspected ?? true,
     };
 
     const newStatus: VerificationStatus = isApproved ? 'authenticity_verified' : 'authenticity_failed';

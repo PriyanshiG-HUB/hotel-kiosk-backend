@@ -4,6 +4,7 @@ import { CheckInService } from '../services/checkin.service';
 import { IdVerificationSessionService } from '../services/idVerificationSession.service';
 import { ImageQualityService } from '../services/imageQuality.service';
 import { OcrService } from '../services/ocr.service';
+import { StaffAuthService } from '../services/staffAuth.service';
 import { CreateSessionDto } from '../types/idVerification.types';
 
 export class IdVerificationController {
@@ -13,7 +14,7 @@ export class IdVerificationController {
    */
   public static async createSession(req: Request, res: Response) {
     try {
-      const { bookingId, guestId, guestName, selectedIdType, issuingCountry, consentGiven } = req.body;
+      const { bookingId, guestId, guestName, selectedIdType, issuingCountry, consentGiven, enteredDocumentNumber } = req.body;
 
       if (!consentGiven) {
         return res.status(400).json({
@@ -55,6 +56,7 @@ export class IdVerificationController {
         selectedIdType,
         issuingCountry,
         consentGiven: Boolean(consentGiven),
+        enteredDocumentNumber: enteredDocumentNumber ? String(enteredDocumentNumber).replace(/[\s\-]/g, '') : undefined,
       };
 
       const session = await IdVerificationSessionService.createSession(dto);
@@ -102,11 +104,20 @@ export class IdVerificationController {
         IdVerificationSessionService.trackTemporaryFile(sessionId, backFile.path);
       }
 
+      // Parse optional crop box if provided
+      let cropBox;
+      if (req.body.cropBox) {
+        try {
+          cropBox = typeof req.body.cropBox === 'string' ? JSON.parse(req.body.cropBox) : req.body.cropBox;
+        } catch (_) {}
+      }
+
       const updated = await IdVerificationSessionService.updateSession(sessionId, {
         status: 'capture_complete',
         frontDocumentUploaded: true,
         backDocumentUploaded: Boolean(backFile),
         documentMimeType: frontFile.mimetype,
+        ...(cropBox ? { cropBox } : {}),
       });
 
       return res.json(updated);
@@ -140,13 +151,19 @@ export class IdVerificationController {
         });
       }
 
+      // Optional crop box from request or stored session
+      const cropBox = req.body?.cropBox || session.cropBox;
+
       // 1. Update status to ocr_processing
       await IdVerificationSessionService.updateSession(sessionId, { status: 'ocr_processing' });
 
-      // 2. Perform Real OCR
+      // 2. Perform Real Preprocessed OCR
       let ocrResult;
       try {
-        ocrResult = await OcrService.recognizeText(frontPath);
+        ocrResult = await OcrService.recognizeText(frontPath, {
+          idType: session.selectedIdType,
+          cropBox,
+        });
       } catch (ocrErr: any) {
         console.error('OCR processing error:', ocrErr);
         await IdVerificationSessionService.updateSession(sessionId, {
@@ -159,13 +176,14 @@ export class IdVerificationController {
         });
       }
 
-      // 3. Extract Fields
-      const extractedFields = OcrService.extractFields(
+      // 3. Extract Detailed Structured Fields
+      const detailedResult = OcrService.extractFieldsDetailed(
         ocrResult.text,
         session.selectedIdType,
         session.issuingCountry,
         ocrResult.confidence
       );
+      const extractedFields = detailedResult.extractedFields;
 
       // 4. Authenticity Check
       const authenticityResult = await AuthenticityService.verifyAuthenticity(
@@ -175,16 +193,53 @@ export class IdVerificationController {
         ocrResult.text
       );
 
-      // 5. Immediate Privacy Cleanup: delete raw images from disk
+      // 5. Aadhaar number consistency check: compare OCR-extracted vs entered number
+      if (session.selectedIdType === 'Aadhaar' && extractedFields.documentNumberMasked) {
+        const enteredRaw = internalSession?.enteredDocumentNumber || session.enteredDocumentNumber;
+
+        if (enteredRaw) {
+          // Normalize: strip spaces, hyphens, non-digit chars
+          const normalize = (n: string) => n.replace(/[\s\-]/g, '').replace(/[^0-9]/g, '');
+          const entered12 = normalize(String(enteredRaw));
+          // Re-extract from raw OCR text for unmasked digit-level comparison
+          const aadhaarRawMatch = ocrResult.text.match(/\b([2-9][0-9]{3}[\s-]?[0-9]{4}[\s-]?[0-9]{4})\b/);
+          const ocrAadhaar12 = aadhaarRawMatch ? normalize(aadhaarRawMatch[1]) : '';
+
+          if (!ocrAadhaar12 || entered12.length !== 12) {
+            extractedFields.aadhaarNumberMatch = 'unable_to_verify';
+            detailedResult.warnings.push('Aadhaar number consistency could not be verified — OCR extraction incomplete.');
+          } else if (entered12 === ocrAadhaar12) {
+            extractedFields.aadhaarNumberMatch = 'match';
+          } else {
+            extractedFields.aadhaarNumberMatch = 'mismatch';
+            detailedResult.warnings.push(
+              `Aadhaar number mismatch: the number on the card (ending ...${ocrAadhaar12.slice(-4)}) differs from the number entered in the form (ending ...${entered12.slice(-4)}). Please recapture or correct.`
+            );
+          }
+        } else {
+          extractedFields.aadhaarNumberMatch = 'unable_to_verify';
+        }
+      }
+
+      // 6. Immediate Privacy Cleanup: delete raw images from disk
       IdVerificationSessionService.cleanupTemporaryFiles(internalSession);
 
-      // 6. Determine final outcome
-      let finalStatus = session.status;
+      // 7. Determine final outcome
+      let finalStatus: any = session.status;
       let overallOutcome: 'proceed' | 'staff_review_required' | 'rejected' = 'proceed';
+
+      // Aadhaar mismatch is a hard gate — must resolve before proceeding
+      const aadhaarMismatch = session.selectedIdType === 'Aadhaar' && extractedFields.aadhaarNumberMatch === 'mismatch';
 
       if (extractedFields.isExpired) {
         finalStatus = 'expired_document';
         overallOutcome = 'rejected';
+      } else if (aadhaarMismatch) {
+        finalStatus = 'pending_manual_review';
+        overallOutcome = 'staff_review_required';
+      } else if (!extractedFields.fullName && !extractedFields.documentNumberMasked && detailedResult.extractionQuality < 20) {
+        finalStatus = 'needs_recapture';
+        overallOutcome = 'staff_review_required';
       } else if (authenticityResult.status === 'verified') {
         finalStatus = 'authenticity_verified';
         overallOutcome = 'proceed';
@@ -204,6 +259,8 @@ export class IdVerificationController {
         extractedFields,
         authenticity: authenticityResult,
         overallOutcome,
+        warnings: detailedResult.warnings,
+        extractionQuality: detailedResult.extractionQuality,
       });
 
       return res.json(updated);
@@ -248,10 +305,10 @@ export class IdVerificationController {
 
       const corrected = {
         ...session.extractedFields,
-        ...(fullName ? { fullName } : {}),
-        ...(documentNumberMasked ? { documentNumberMasked } : {}),
-        ...(dateOfBirth ? { dateOfBirth } : {}),
-        ...(expirationDate ? { expirationDate } : {}),
+        ...(fullName !== undefined ? { fullName: String(fullName).trim() } : {}),
+        ...(documentNumberMasked !== undefined ? { documentNumberMasked: String(documentNumberMasked).trim() } : {}),
+        ...(dateOfBirth !== undefined ? { dateOfBirth: String(dateOfBirth).trim() } : {}),
+        ...(expirationDate !== undefined ? { expirationDate: String(expirationDate).trim() } : {}),
       };
 
       const updated = await IdVerificationSessionService.updateSession(sessionId, {
@@ -311,7 +368,7 @@ export class IdVerificationController {
   public static async staffReview(req: Request, res: Response) {
     try {
       const sessionId = req.params.sessionId as string;
-      const { staffId, staffPin, decision, notes, staffName } = req.body;
+      const { staffId, staffPin, decision, notes, staffName, physicalOriginalInspected } = req.body;
 
       if (!staffId || !decision) {
         return res.status(400).json({
@@ -320,30 +377,57 @@ export class IdVerificationController {
         });
       }
 
-      // Security validation: verify staff kiosk PIN
-      const expectedPin = process.env.STAFF_KIOSK_PIN || '1234';
-      if (!staffPin || String(staffPin).trim() !== expectedPin) {
-        return res.status(401).json({
-          message: 'Invalid staff authorization PIN. Physical inspection approval denied.',
-          code: 'unauthorized_staff',
+      // Security check: Physical inspection confirmation required for approval
+      if (decision === 'approved' && physicalOriginalInspected === false) {
+        return res.status(400).json({
+          message: 'Staff must confirm physical original document inspection before granting approval.',
+          code: 'physical_inspection_required',
         });
       }
 
-      const updated = await IdVerificationSessionService.recordStaffReview(sessionId, {
-        staffId: String(staffId).trim(),
-        staffName: staffName ? String(staffName).trim() : undefined,
-        decision,
-        notes: notes ? String(notes).trim() : undefined,
-      });
+      // Authenticate staff with bcrypt & role authorization
+      const auth = await StaffAuthService.authenticateStaff(String(staffId).trim(), String(staffPin || ''), [
+        'admin',
+        'manager',
+        'front_desk',
+      ]);
 
-      if (!updated) {
-        return res.status(404).json({
-          message: 'Verification session not found or expired.',
-          code: 'session_expired',
+      if (!auth.authenticated || !auth.staff) {
+        const statusCode = auth.code === 'unauthorized_role' ? 403 : auth.code === 'account_locked' ? 423 : 401;
+        return res.status(statusCode).json({
+          message: auth.error || 'Invalid staff authorization credentials.',
+          code: auth.code || 'unauthorized_staff',
         });
       }
 
-      return res.json(updated);
+      // Record staff review with authenticated staff details
+      try {
+        const updated = await IdVerificationSessionService.recordStaffReview(sessionId, {
+          staffId: auth.staff.staffCode || auth.staff.staffId,
+          staffName: auth.staff.fullName,
+          staffPin: String(staffPin || ''),
+          decision,
+          notes: notes ? String(notes).trim() : undefined,
+          physicalOriginalInspected: decision === 'approved' ? Boolean(physicalOriginalInspected ?? true) : false,
+        });
+
+        if (!updated) {
+          return res.status(404).json({
+            message: 'Verification session not found or expired.',
+            code: 'session_expired',
+          });
+        }
+
+        return res.json(updated);
+      } catch (reviewErr: any) {
+        if (reviewErr.message?.includes('already been reviewed')) {
+          return res.status(409).json({
+            message: reviewErr.message,
+            code: 'duplicate_review',
+          });
+        }
+        throw reviewErr;
+      }
     } catch (err: any) {
       console.error('Error during staff review:', err);
       return res.status(500).json({ message: 'Internal Server Error', error: err.message });

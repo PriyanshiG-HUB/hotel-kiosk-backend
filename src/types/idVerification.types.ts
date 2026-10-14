@@ -3,6 +3,7 @@ export type VerificationStatus =
   | 'capture_complete'
   | 'ocr_processing'
   | 'ocr_completed'
+  | 'needs_recapture'
   | 'authenticity_pending'
   | 'authenticity_verified'
   | 'authenticity_failed'
@@ -31,9 +32,14 @@ export interface ExtractedFields {
   expirationDate?: string; // YYYY-MM-DD
   issueDate?: string;
   gender?: string;
+  address?: string;
   confidence: number; // Extraction confidence (0 to 1)
   isExpired: boolean;
   rawConfidenceDetails?: Record<string, number>;
+  warnings?: string[];
+  extractionQuality?: number; // 0 to 100 percentage
+  /** Result of comparing OCR-extracted number vs number entered earlier in the form */
+  aadhaarNumberMatch?: 'match' | 'mismatch' | 'unable_to_verify';
 }
 
 export interface AuthenticityResult {
@@ -58,11 +64,15 @@ export interface BookingValidationResult {
 }
 
 export interface StaffReviewRecord {
-  reviewedBy: string;
+  reviewedBy: string; // staffCode or full name
+  staffId?: string;
+  staffCode?: string;
   staffName?: string;
+  role?: string;
   reviewedAt: string;
   decision: 'approved' | 'rejected';
   notes?: string;
+  physicalOriginalInspected: boolean;
 }
 
 export interface VerificationSession {
@@ -70,6 +80,8 @@ export interface VerificationSession {
   bookingId?: string;
   guestId?: string;
   expectedGuestName?: string;
+  /** The document number the guest entered earlier in the check-in form (used for OCR comparison) */
+  enteredDocumentNumber?: string;
   selectedIdType: SupportedIdType;
   issuingCountry: string;
   consentObtained: boolean;
@@ -86,22 +98,29 @@ export interface VerificationSession {
   staffReview?: StaffReviewRecord;
   persistenceStatus?: 'supabase_database' | 'persistent_file_store';
   overallOutcome: 'proceed' | 'staff_review_required' | 'rejected' | 'in_progress';
+  warnings?: string[];
+  extractionQuality?: number;
+  cropBox?: { x: number; y: number; width: number; height: number };
   createdAt: string;
   updatedAt: string;
   expiresAt: string;
 }
 
 export interface StaffReviewDto {
-  staffId: string;
-  staffName?: string;
+  staffId: string; // staffCode (e.g. STAFF-101) or staffId UUID
+  staffPin: string;
   decision: 'approved' | 'rejected';
   notes?: string;
+  staffName?: string;
+  physicalOriginalInspected?: boolean;
 }
 
 export interface CreateSessionDto {
   bookingId?: string;
   guestId?: string;
   guestName?: string;
+  /** The document number the guest entered in a prior step (e.g. Aadhaar number from booking form) */
+  enteredDocumentNumber?: string;
   selectedIdType: SupportedIdType;
   issuingCountry: string;
   consentGiven: boolean;

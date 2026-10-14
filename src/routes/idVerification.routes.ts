@@ -90,6 +90,7 @@ router.post(
     body('staffId').notEmpty().withMessage('Staff ID is required'),
     body('staffPin').notEmpty().withMessage('Staff PIN is required'),
     body('decision').isIn(['approved', 'rejected']).withMessage('Decision must be "approved" or "rejected"'),
+    body('physicalOriginalInspected').optional().isBoolean().withMessage('physicalOriginalInspected must be a boolean'),
   ],
   validate,
   IdVerificationController.staffReview
